@@ -43,22 +43,22 @@ def get_system_config(current_user=Depends(role_checker("admin"))):
     Returns safe system configuration details (excluding secrets and passwords).
     """
     return {
-        "app_name": settings.app_name,
-        "environment": settings.app_env,
-        "host": settings.app_host,
-        "port": settings.app_port,
+        "app_name": settings.APP_NAME,
+        "environment": settings.APP_ENV,
+        "host": settings.APP_HOST,
+        "port": settings.APP_PORT,
         "database": {
-            "host": settings.db_host,
-            "port": settings.db_port,
-            "name": settings.db_name,
-            "user": settings.db_user,
+            "host": settings.POSTGRES_SERVER,
+            "port": settings.POSTGRES_PORT,
+            "name": settings.POSTGRES_DB,
+            "user": settings.POSTGRES_USER,
         },
         "logging": {
-            "level": settings.log_level,
+            "level": settings.LOG_LEVEL,
         },
         "jwt": {
-            "algorithm": settings.algorithm,
-            "token_expiry_minutes": settings.access_token_expire_minutes,
+            "algorithm": settings.ALGORITHM,
+            "token_expiry_minutes": settings.ACCESS_TOKEN_EXPIRE_MINUTES,
         },
         "last_checked": datetime.utcnow().isoformat(),
     }

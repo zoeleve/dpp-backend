@@ -11,8 +11,8 @@ from app.configs.roles import Role
 security = HTTPBearer()
 
 # Load secret and algorithm from settings
-SECRET_KEY = settings.secret_key
-ALGORITHM = settings.algorithm
+SECRET_KEY = settings.SECRET_KEY
+ALGORITHM = settings.ALGORITHM
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
     """

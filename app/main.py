@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from app.configs.config import settings
-from app.routers import user, system, auth, dpp_json, dpp_file
+from app.routers import user, system, auth, dpp_json, dpp_file, dpp_sparql
 from app.db.database_postgre import Base, engine
 
 app = FastAPI(title=settings.app_name)
@@ -18,6 +18,7 @@ app.include_router(user.router)
 app.include_router(dpp_json.router)
 app.include_router(dpp_file.router)
 app.include_router(system.router)
+app.include_router(dpp_sparql.router)
 
 def custom_openapi():
     if app.openapi_schema:

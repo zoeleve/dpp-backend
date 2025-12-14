@@ -1,23 +1,49 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "DPP Management Platform"
-    app_env: str
-    app_host: str
-    app_port: int
-    db_user: str
-    db_pass: str
-    db_host: str
-    db_port: str
-    db_name: str
-    secret_key: str
-    algorithm: str
-    access_token_expire_minutes: int
-    log_level: str
+    
+    # Database settings
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_SERVER: str
+    POSTGRES_PORT: str
+    POSTGRES_DB: str
 
-    class Config:
-        env_file = ".env"
+    # Security settings
+    SECRET_KEY: str
+    ALGORITHM: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
+
+    # Fuseki settings
+    FUSEKI_HOST: str = "localhost"
+    FUSEKI_PORT: int = 3030
+    FUSEKI_DATASET_NAME: str = "dpp_dataset"
+
+    LOG_LEVEL: str
+
+    @property
+    def FUSEKI_ENDPOINT(self) -> str:
+        """Base URL for SPARQL query endpoint."""
+        return f"http://{self.FUSEKI_HOST}:{self.FUSEKI_PORT}/{self.FUSEKI_DATASET_NAME}"
+
+    @property
+    def FUSEKI_QUERY_URL(self) -> str:
+        """Full URL for SPARQL SELECT/CONSTRUCT queries."""
+        return f"{self.FUSEKI_ENDPOINT}/query"
+
+    @property
+    def FUSEKI_UPDATE_URL(self) -> str:
+        """Full URL for SPARQL INSERT/DELETE updates."""
+        return f"{self.FUSEKI_ENDPOINT}/update"
+
+    @property
+    def FUSEKI_DATA_URL(self) -> str:
+        """Full URL for direct Graph data operations (PUT/POST RDF)."""
+        return f"{self.FUSEKI_ENDPOINT}/data"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
