@@ -6,7 +6,7 @@ This is a Python backend project that uses Poetry for dependency management.
 
 ### Prerequisites
 
-* Python 3.8+
+* Python 3.11+
 * Poetry
 
 ### Installation
@@ -42,4 +42,3 @@ This is a Python backend project that uses Poetry for dependency management.
    poetry run uvicorn app.main:app --reload
    ```
    
-

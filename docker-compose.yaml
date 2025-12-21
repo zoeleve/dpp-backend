@@ -6,13 +6,13 @@ services:
     image: postgres:15-alpine
     restart: always
     environment:
-      POSTGRES_USER: dpp_user
-      POSTGRES_PASSWORD: dpp_password
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: dpp_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck: # Health check to ensure DB is ready before backend starts
-      test: ["CMD-SHELL", "pg_isready -U dpp_user -d dpp_db"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dpp_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -23,13 +23,12 @@ services:
     restart: always
     ports:
       - "3030:3030" # Expose the Fuseki port to the host
+    environment:
+      ADMIN_PASSWORD: admin
+      FUSEKI_DATASET_1: dpp_dataset
     volumes:
       # Persistent storage for the RDF data
-      - fuseki_data:/jena/databases
-    environment:
-      # Name the dataset as required in your settings
-      FUSEKI_DATASET_NAME: dpp_dataset
-    command: ["/jena/fuseki-server", "--update", "--dataset=/jena/databases/${FUSEKI_DATASET_NAME}", "--port=3030"]
+      - fuseki_data:/fuseki
 
   # 3. FastAPI Backend Service (Your Application)
   backend:
@@ -44,6 +43,9 @@ services:
         condition: service_started # Wait for Fuseki to start
     env_file:
       - .env # Load environment variables from the .env file
+    environment:
+      POSTGRES_SERVER: db
+      FUSEKI_HOST: fuseki
 
 volumes:
   postgres_data:

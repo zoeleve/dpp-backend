@@ -21,35 +21,62 @@ from loguru import logger
 router = APIRouter(prefix="/dpp/json", tags=["DPP JSON"])
 
 @router.post("/", response_model=DPPResponse)
-def create_dpp(dpp: DPPCreate, db: Session = Depends(get_db)):
-    # Validation already handled by Pydantic schema
-    new_dpp = DPP(**dpp.dict())
+async def create_dpp(
+    dpp: DPPCreate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    dpp_dict = dpp.dict()
+    
+    # Extract specific columns
+    title = dpp_dict.pop("title")
+    dpp_uuid = dpp_dict.pop("product_id")
+    
+    # The rest of the data goes into the JSONB column
+    new_dpp = DPP(
+        title=title,
+        dpp_uuid=dpp_uuid,
+        owner_id=current_user.id,
+        dpp_data=dpp_dict,  # Store remaining fields (identification, etc.) here
+        is_published=False
+    )
+    
     db.add(new_dpp)
-    db.commit()
-    db.refresh(new_dpp)
+    await db.commit()
+    await db.refresh(new_dpp)
     return new_dpp
 
 
 @router.get("/{dpp_id}", response_model=DPPResponse)
-def get_dpp(dpp_id: int, db: Session = Depends(get_db)):
-    dpp = db.query(DPP).filter(DPP.id == dpp_id).first()
+async def get_dpp(dpp_id: int, db: AsyncSession = Depends(get_db)):
+    dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
     return dpp
 
 
 @router.put("/{dpp_id}", response_model=DPPResponse)
-def update_dpp(dpp_id: int, update_data: DPPUpdate, db: Session = Depends(get_db)):
-    dpp = db.query(DPP).filter(DPP.id == dpp_id).first()
+async def update_dpp(dpp_id: int, update_data: DPPUpdate, db: AsyncSession = Depends(get_db)):
+    dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
 
-    # Validate before saving (Pydantic ensures correct schema)
-    for key, value in update_data.dict(exclude_unset=True).items():
-        setattr(dpp, key, value)
+    update_dict = update_data.dict(exclude_unset=True)
 
-    db.commit()
-    db.refresh(dpp)
+    # Handle specific column updates
+    if "title" in update_dict:
+        dpp.title = update_dict.pop("title")
+    if "product_id" in update_dict:
+        dpp.dpp_uuid = update_dict.pop("product_id")
+
+    # Merge remaining fields into dpp_data
+    if update_dict:
+        current_data = dict(dpp.dpp_data) if dpp.dpp_data else {}
+        current_data.update(update_dict)
+        dpp.dpp_data = current_data
+
+    await db.commit()
+    await db.refresh(dpp)
     return dpp
 
 
@@ -124,12 +151,12 @@ async def unpublish_dpp(
 
 
 @router.delete("/{dpp_id}")
-def delete_dpp(dpp_id: int, db: Session = Depends(get_db)):
-    dpp = db.query(DPP).filter(DPP.id == dpp_id).first()
+async def delete_dpp(dpp_id: int, db: AsyncSession = Depends(get_db)):
+    dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
-    db.delete(dpp)
-    db.commit()
+    await db.delete(dpp)
+    await db.commit()
     return {"detail": f"DPP {dpp_id} deleted successfully"}
 
 
@@ -189,6 +216,3 @@ async def search_dpp_entries(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred during database search."
             )
-
-
-
