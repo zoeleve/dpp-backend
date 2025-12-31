@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Form
+from fastapi import APIRouter, Depends, HTTPException, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from app.models.user import User
 from app.schemas.user import UserResponse, UserUpdate, PasswordUpdate
 from app.utils.security import hash_password
-from app.utils.auth import role_checker
+from app.utils.auth import role_checker, get_current_user
 from app.db.database_postgre import get_db
 from app.configs.roles import Role, UserSubRole
 from sqlalchemy import select
@@ -112,8 +112,18 @@ async def create_user(
 # UPDATE USER INFO
 # ---------------------------------------------------------------------
 @router.put("/{user_id}", response_model=UserResponse)
-async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = Depends(get_db)):
-    """Update a user's information."""
+async def update_user(
+    user_id: int, 
+    user_update: UserUpdate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update a user's information. Users can only update their own info, unless admin."""
+    
+    # Check permissions
+    if current_user.id != user_id and current_user.role != Role.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this user")
+
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -137,13 +147,23 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 # UPDATE PASSWORD
 # ---------------------------------------------------------------------
 @router.put("/{user_id}/password")
-async def update_password(user_id: int, pw_update: PasswordUpdate, db: AsyncSession = Depends(get_db)):
-    """Change a user's password."""
+async def update_password(
+    user_id: int, 
+    pw_update: PasswordUpdate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Change a user's password. Users can only change their own password, unless admin."""
+    
+    # Check permissions
+    if current_user.id != user_id and current_user.role != Role.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this user's password")
+
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    user.hashed_password = hash_password(pw_.new_password)
+    user.hashed_password = hash_password(pw_update.new_password)
     await db.commit()
     return {"message": f"Password updated successfully for user ID {user_id}."}
 
@@ -155,12 +175,22 @@ async def update_password(user_id: int, pw_update: PasswordUpdate, db: AsyncSess
 async def delete_user(
         user_id: int,
         db: AsyncSession = Depends(get_db),
-        current_user=Depends(role_checker("admin"))
+        current_user: User = Depends(get_current_user)
     ):
-    """Delete a user by ID."""
+    """Delete a user by ID. Users can delete themselves. Admins can delete anyone but themselves."""
+    
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Permission Logic
+    if current_user.role == Role.ADMIN:
+        if current_user.id == user_id:
+            raise HTTPException(status_code=400, detail="Admins cannot delete themselves.")
+    else:
+        # Normal user
+        if current_user.id != user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this user")
 
     await db.delete(user)
     await db.commit()

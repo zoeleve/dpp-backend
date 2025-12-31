@@ -64,10 +64,6 @@ def _build_advanced_jsonb_filter(criteria: AdvancedCriteria) -> BinaryExpression
     if isinstance(value, list):
         # We need to construct a PostgreSQL query that checks if all/any values are contained in the JSONB array
 
-        # NOTE: This requires PostgreSQL's JSONB containment operators (@>) which are complex
-        # to implement directly with standard SQLAlchemy ORM. We use a more generic approach
-        # or require direct use of the `jsonb` column object.
-
         # A simpler approach using JSONB contains operator (@>) for array containment:
         jsonb_list_value = func.jsonb_build_array(*value)
 
@@ -76,10 +72,18 @@ def _build_advanced_jsonb_filter(criteria: AdvancedCriteria) -> BinaryExpression
             return dpp_data_column.op('@>')(jsonb_list_value)
 
         if criteria.multi_value_logic == 'any':
-            # Check if JSONB array in DPP contains ANY element in the search list
-            # We can use the OR logic by checking each value individually if @> is too strict.
-            # However, for simplicity and performance with @>, we stick to containment:
-            return dpp_data_column.op('@>')(jsonb_list_value)
+            # Check if JSONB array in DPP contains ANY element in the search list.
+            # The @> operator checks if the left JSON contains the right JSON.
+            # To check "ANY", we need to check if the intersection is not empty, OR check each item individually.
+            # Checking individually is safer with standard operators:
+            
+            or_conditions = []
+            for item in value:
+                # Build a single-item JSON array for containment check
+                single_item_json = func.jsonb_build_array(item)
+                or_conditions.append(dpp_data_column.op('@>')(single_item_json))
+            
+            return or_(*or_conditions)
 
     # Fallback for unexpected criteria type
     return cast(dpp_data_column, String) == value
@@ -116,43 +120,37 @@ async def search_dpps(
     # 2. Search Mode Specific Filters
 
     if search_data.search_mode == SearchMode.SIMPLE:
-        # Simple Search (Full-Text Search)
-
-        # We need a PostgreSQL Text Search Configuration (e.g., 'english', 'simple')
-        # This requires creating a GIN index on a generated tsvector column combining
-        # DPP.title and DPP.dpp_data. We will use the simplest FTS expression for now,
-        # assuming a tsvector column named `full_text_search_vector` exists on DPP.
-
+        # Simple Search (Full-Text Search approximation)
         keywords = search_data.keywords
+        
+        if keywords:
+            # Determine logic: AND (if '+' or 'AND' present) vs OR (default)
+            if '+' in keywords:
+                terms = [t.strip() for t in keywords.split('+') if t.strip()]
+                logic = 'AND'
+            elif ' AND ' in keywords: # Case sensitive check for ' AND '
+                 terms = [t.strip() for t in keywords.split(' AND ') if t.strip()]
+                 logic = 'AND'
+            else:
+                # Default OR logic, split by space
+                terms = [t.strip() for t in keywords.split() if t.strip()]
+                logic = 'OR'
 
-        # Convert search keywords to a tsquery (e.g., 'word1 + word2' -> 'word1 & word2')
-        # We assume '+' or 'AND' means conjunction (&) and space means disjunction (|).
+            term_filters = []
+            for term in terms:
+                # Search in title OR in the JSONB data
+                term_filter = or_(
+                    DPP.title.ilike(f"%{term}%"),
+                    cast(DPP.dpp_data, String).ilike(f"%{term}%")
+                )
+                term_filters.append(term_filter)
 
-        # Using simple PostgreSQL FTS syntax (needs proper index/vector setup in migrations)
-        if '+' in keywords or 'AND' in keywords.upper():
-            # Conjunction search (must contain all terms)
-            terms = keywords.replace('+', ' ').replace('AND', ' ').split()
-            search_query = ' & '.join(terms)
-        else:
-            # Disjunction search (must contain at least one term)
-            terms = keywords.split()
-            search_query = ' | '.join(terms)
-
-        # Execute FTS filter using the match operator (@@) against a combined TSVECTOR.
-        # NOTE: DPP.tsvector_col is an imaginary column for this example.
-        # We'll approximate FTS using ILIKE on the title for simplicity,
-        # but in production, real FTS index on JSONB is needed.
-
-        # Placeholder for real FTS:
-        # fts_filter = DPP.tsvector_col.op('@@')(func.to_tsquery('english', search_query))
-
-        # Simple approximation using title or the whole JSONB data (less efficient for large data):
-        approx_fts_filter = or_(
-            DPP.title.ilike(f"%{keywords}%"),
-            # Searching within the whole JSONB converted to text
-            cast(DPP.dpp_data, String).ilike(f"%{keywords}%")
-        )
-        filters.append(approx_fts_filter)
+            if logic == 'AND':
+                # All terms must match
+                filters.append(and_(*term_filters))
+            else:
+                # At least one term must match
+                filters.append(or_(*term_filters))
 
     elif search_data.search_mode == SearchMode.ADVANCED:
         # Advanced Search (JSONB operators)

@@ -1,7 +1,8 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.db.database_postgre import get_db
 from app.models.user import User
@@ -14,7 +15,7 @@ security = HTTPBearer()
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: AsyncSession = Depends(get_db)):
     """
     Validates a Bearer token pasted manually in Swagger.
     """
@@ -33,14 +34,16 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     except JWTError:
         raise credentials_exception
 
-    user = db.query(User).filter(User.username == username).first()
+    result = await db.execute(select(User).filter(User.username == username))
+    user = result.scalar_one_or_none()
+    
     if user is None:
         raise credentials_exception
     return user
 
 
 def require_role(required_role: Role):
-    def role_dependency(current_user: User = Depends(get_current_user)):
+    async def role_dependency(current_user: User = Depends(get_current_user)):
         if current_user.role != required_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -51,7 +54,7 @@ def require_role(required_role: Role):
 
 
 def role_checker(*allowed_roles):
-    def wrapper(current_user=Depends(get_current_user)):
+    async def wrapper(current_user=Depends(get_current_user)):
         if current_user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

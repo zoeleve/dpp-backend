@@ -48,18 +48,36 @@ async def create_dpp(
 
 
 @router.get("/{dpp_id}", response_model=DPPResponse)
-async def get_dpp(dpp_id: int, db: AsyncSession = Depends(get_db)):
+async def get_dpp(
+    dpp_id: int, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
+    
+    # Access Control
+    if not dpp.is_published and dpp.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this unpublished DPP")
+
     return dpp
 
 
 @router.put("/{dpp_id}", response_model=DPPResponse)
-async def update_dpp(dpp_id: int, update_data: DPPUpdate, db: AsyncSession = Depends(get_db)):
+async def update_dpp(
+    dpp_id: int, 
+    update_data: DPPUpdate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
+
+    # Ownership Check
+    if dpp.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this DPP")
 
     update_dict = update_data.dict(exclude_unset=True)
 
@@ -151,10 +169,19 @@ async def unpublish_dpp(
 
 
 @router.delete("/{dpp_id}")
-async def delete_dpp(dpp_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_dpp(
+    dpp_id: int, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
+    
+    # Ownership Check
+    if dpp.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this DPP")
+
     await db.delete(dpp)
     await db.commit()
     return {"detail": f"DPP {dpp_id} deleted successfully"}

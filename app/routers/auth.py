@@ -28,7 +28,10 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     Returns basic information about the currently authenticated user.
     """
     return {
+        "id": current_user.id,
         "username": current_user.username,
+        "full_name": current_user.full_name,
         "email": current_user.email,
-        "role": current_user.role
+        "role": current_user.role,
+        "sub_role": current_user.subrole
     }
