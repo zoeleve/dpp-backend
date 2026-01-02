@@ -2,13 +2,49 @@ import requests
 import json
 
 # Configuration
-API_URL = "http://localhost:8000/dpp/json/"
-TOKEN = "YOUR_JWT_ACCESS_TOKEN_HERE" # Βάλε το token που πήρες από το /auth/login
+BASE_URL = "http://localhost:8000"
+LOGIN_URL = f"{BASE_URL}/auth/login"
+REGISTER_URL = f"{BASE_URL}/users/"
+API_URL = f"{BASE_URL}/dpp/json/"
 
-headers = {
-    "Authorization": f"Bearer {TOKEN}",
-    "Content-Type": "application/json"
-}
+# Credentials
+USERNAME = "zoe"
+PASSWORD = "test"
+EMAIL = "zoe@example.com"
+
+def create_user():
+    print(f"👤 Attempting to create user '{USERNAME}'...")
+    payload = {
+        "username": USERNAME,
+        "password": PASSWORD,
+        "email": EMAIL,
+        "role": "admin"
+    }
+    try:
+        response = requests.post(REGISTER_URL, data=payload) # Form data
+        if response.status_code in [200, 201]:
+            print("✅ User created successfully!")
+        elif response.status_code == 400 and "Email already registered" in response.text:
+            print("ℹ️ User already exists (Email registered).")
+        else:
+            print(f"⚠️ User creation returned {response.status_code}: {response.text}")
+            # Try to proceed anyway, maybe username exists but email check failed differently
+    except Exception as e:
+        print(f"💥 Failed to connect to registration: {str(e)}")
+
+def get_access_token():
+    try:
+        response = requests.post(LOGIN_URL, json={"username": USERNAME, "password": PASSWORD})
+        if response.status_code == 200:
+            token = response.json().get("access_token")
+            print("✅ Successfully authenticated!")
+            return token
+        else:
+            print(f"❌ Authentication failed: {response.text}")
+            return None
+    except Exception as e:
+        print(f"💥 Failed to connect to login: {str(e)}")
+        return None
 
 # Dataset με 20 Αντικείμενα
 dpp_data = [
@@ -128,6 +164,20 @@ for i in range(9, 21):
     })
 
 def seed_database():
+    # Step 1: Create User
+    create_user()
+    
+    # Step 2: Login
+    token = get_access_token()
+    if not token:
+        print("❌ Aborting seeding due to authentication failure.")
+        return
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
     print(f"🚀 Starting seeding of {len(dpp_data)} items...")
     for item in dpp_data:
         try:
