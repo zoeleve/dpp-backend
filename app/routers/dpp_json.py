@@ -2,14 +2,17 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, or_, and_
 from app.db.database_postgre import get_db
 from app.models.dpp import DPP
 from app.models.user import User
+from app.configs.roles import Role
 from app.schemas.dpp import (
     DPPCreate,
     DPPUpdate,
     DPPResponse,
     DPPStatus,
+    DPPStats,
     SearchSchema,
     SearchResponse,
     SearchMode
@@ -19,6 +22,54 @@ from app.utils.dpp_search_engine import search_dpps
 from loguru import logger
 
 router = APIRouter(prefix="/dpp/json", tags=["DPP JSON"])
+
+@router.get("/stats", response_model=DPPStats)
+async def get_dpp_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Returns statistics for DPPs visible to the current user.
+    """
+    
+    # 1. Published DPPs (Visible to everyone)
+    published_query = select(func.count()).select_from(DPP).where(DPP.is_published == True)
+    published_count = (await db.execute(published_query)).scalar_one()
+
+    # 2. Draft DPPs (Visibility depends on role)
+    if current_user.role == Role.ADMIN:
+        # Admin sees ALL drafts
+        draft_query = select(func.count()).select_from(DPP).where(DPP.is_published == False)
+    else:
+        # Regular users only see THEIR OWN drafts
+        draft_query = select(func.count()).select_from(DPP).where(
+            and_(DPP.is_published == False, DPP.owner_id == current_user.id)
+        )
+    draft_count = (await db.execute(draft_query)).scalar_one()
+
+    # 3. Total DPPs (Visible)
+    # Logic: Total = Published + Visible Drafts
+    if current_user.role == Role.ADMIN:
+        total_query = select(func.count()).select_from(DPP)
+    else:
+        total_query = select(func.count()).select_from(DPP).where(
+            or_(
+                DPP.is_published == True,
+                DPP.owner_id == current_user.id
+            )
+        )
+    total_count = (await db.execute(total_query)).scalar_one()
+
+    # 4. My DPPs (Owned by current user, regardless of status)
+    my_dpps_query = select(func.count()).select_from(DPP).where(DPP.owner_id == current_user.id)
+    my_dpps_count = (await db.execute(my_dpps_query)).scalar_one()
+
+    return DPPStats(
+        total_dpps=total_count,
+        published_dpps=published_count,
+        draft_dpps=draft_count,
+        my_dpps=my_dpps_count
+    )
 
 @router.post("/", response_model=DPPResponse)
 async def create_dpp(
@@ -31,6 +82,14 @@ async def create_dpp(
     # Extract specific columns
     title = dpp_dict.pop("title")
     dpp_uuid = dpp_dict.pop("product_id")
+
+    # Check if DPP with the same UUID already exists
+    existing_dpp = await db.execute(select(DPP).where(DPP.dpp_uuid == dpp_uuid))
+    if existing_dpp.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A DPP with Product ID '{dpp_uuid}' already exists."
+        )
     
     # The rest of the data goes into the JSONB column
     new_dpp = DPP(
@@ -57,9 +116,10 @@ async def get_dpp(
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
     
-    # Access Control
-    if not dpp.is_published and dpp.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to view this unpublished DPP")
+    # Access Control: Admin can see everything, others check ownership/published status
+    if current_user.role != Role.ADMIN:
+        if not dpp.is_published and dpp.owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to view this unpublished DPP")
 
     return dpp
 
@@ -75,8 +135,8 @@ async def update_dpp(
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
 
-    # Ownership Check
-    if dpp.owner_id != current_user.id:
+    # Ownership Check: Only owner or Admin can edit
+    if current_user.role != Role.ADMIN and dpp.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to edit this DPP")
 
     update_dict = update_data.dict(exclude_unset=True)
@@ -85,7 +145,16 @@ async def update_dpp(
     if "title" in update_dict:
         dpp.title = update_dict.pop("title")
     if "product_id" in update_dict:
-        dpp.dpp_uuid = update_dict.pop("product_id")
+        new_uuid = update_dict.pop("product_id")
+        # Check if the new UUID already exists (and it's not the current DPP)
+        if new_uuid != dpp.dpp_uuid:
+            existing_dpp = await db.execute(select(DPP).where(DPP.dpp_uuid == new_uuid))
+            if existing_dpp.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"A DPP with Product ID '{new_uuid}' already exists."
+                )
+        dpp.dpp_uuid = new_uuid
 
     # Merge remaining fields into dpp_data
     if update_dict:
@@ -106,12 +175,13 @@ async def publish_dpp(
 ):
     """
     Publishes a DPP, making it discoverable via search by non-owners.
-    Only the DPP owner can perform this action.
+    Only the DPP owner or Admin can perform this action.
     """
     dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
-    if dpp.owner_id != current_user.id:
+    
+    if current_user.role != Role.ADMIN and dpp.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to publish this DPP")
 
     if dpp.is_published:
@@ -141,12 +211,13 @@ async def unpublish_dpp(
 ):
     """
     Unpublishes a DPP, hiding it from non-owner search results.
-    Only the DPP owner can perform this action.
+    Only the DPP owner or Admin can perform this action.
     """
     dpp = await db.get(DPP, dpp_id)
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
-    if dpp.owner_id != current_user.id:
+    
+    if current_user.role != Role.ADMIN and dpp.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to unpublish this DPP")
 
     if not dpp.is_published:
@@ -178,8 +249,8 @@ async def delete_dpp(
     if not dpp:
         raise HTTPException(status_code=404, detail="DPP not found")
     
-    # Ownership Check
-    if dpp.owner_id != current_user.id:
+    # Ownership Check: Only owner or Admin can delete
+    if current_user.role != Role.ADMIN and dpp.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this DPP")
 
     await db.delete(dpp)

@@ -6,6 +6,7 @@ from sqlalchemy.sql.elements import BinaryExpression, TextClause
 from app.models.dpp import DPP
 from app.schemas.dpp import SearchSchema, SearchMode, ComparisonOperator, SearchMatch, AdvancedCriteria, SortingWeight
 from app.models.user import User  # Assuming User model import
+from app.configs.roles import Role
 
 
 # --- 1. JSONB Query Translation ---
@@ -109,13 +110,16 @@ async def search_dpps(
 
     # Users (non-owners) can only see published DPPs
     # Owners can see their own, published or not.
+    # Admins can see everything.
 
-    # All results must either be published OR belong to the current user
-    ownership_filter = or_(
-        DPP.is_published == True,
-        DPP.owner_id == current_user.id
-    )
-    filters.append(ownership_filter)
+    if current_user.role != Role.ADMIN:
+        # All results must either be published OR belong to the current user
+        ownership_filter = or_(
+            DPP.is_published == True,
+            DPP.owner_id == current_user.id
+        )
+        filters.append(ownership_filter)
+    # If Admin, no ownership filter is applied (they see all)
 
     # 2. Search Mode Specific Filters
 
@@ -123,7 +127,8 @@ async def search_dpps(
         # Simple Search (Full-Text Search approximation)
         keywords = search_data.keywords
         
-        if keywords:
+        # CHANGE: Check if there are actual terms after stripping
+        if keywords and keywords.strip():
             # Determine logic: AND (if '+' or 'AND' present) vs OR (default)
             if '+' in keywords:
                 terms = [t.strip() for t in keywords.split('+') if t.strip()]
@@ -136,21 +141,23 @@ async def search_dpps(
                 terms = [t.strip() for t in keywords.split() if t.strip()]
                 logic = 'OR'
 
-            term_filters = []
-            for term in terms:
-                # Search in title OR in the JSONB data
-                term_filter = or_(
-                    DPP.title.ilike(f"%{term}%"),
-                    cast(DPP.dpp_data, String).ilike(f"%{term}%")
-                )
-                term_filters.append(term_filter)
+            # ONLY apply filters if terms list is not empty
+            if terms:
+                term_filters = []
+                for term in terms:
+                    # Search in title OR in the JSONB data
+                    term_filter = or_(
+                        DPP.title.ilike(f"%{term}%"),
+                        cast(DPP.dpp_data, String).ilike(f"%{term}%")
+                    )
+                    term_filters.append(term_filter)
 
-            if logic == 'AND':
-                # All terms must match
-                filters.append(and_(*term_filters))
-            else:
-                # At least one term must match
-                filters.append(or_(*term_filters))
+                if logic == 'AND':
+                    # All terms must match
+                    filters.append(and_(*term_filters))
+                else:
+                    # At least one term must match
+                    filters.append(or_(*term_filters))
 
     elif search_data.search_mode == SearchMode.ADVANCED:
         # Advanced Search (JSONB operators)

@@ -5,18 +5,37 @@ from pydantic import BaseModel, Field, constr, field_validator, model_validator
 from datetime import datetime
 
 
-# --- 1. CORE DPP DATA SCHEMAS (UNCHANGED) ---
+# --- 1. CORE DPP DATA SCHEMAS (AAS ALIGNED) ---
+
+class AASSubmodel(BaseModel):
+    """
+    Represents an Asset Administration Shell (AAS) Submodel.
+    Examples: DigitalNameplate, CarbonFootprint, TechnicalData.
+    """
+    idShort: str = Field(..., description="Short identifier for the submodel (e.g., 'DigitalNameplate')")
+    semanticId: Optional[str] = Field(None, description="Reference to the semantic definition (e.g., ECLASS IRDI)")
+    submodelElements: Dict[str, Any] = Field(default_factory=dict, description="Key-value pairs of data elements")
+
 
 class DPPBase(BaseModel):
-    # Core universally valid DPP identifiers
-    product_id: Optional[constr(min_length=3, max_length=200)] = None
+    # Core universally valid DPP identifiers (AAS AssetInformation)
+    product_id: Optional[constr(min_length=3, max_length=200)] = Field(
+        None, 
+        description="GlobalAssetId (e.g., DID, GTIN, UUID)"
+    )
     manufacturer: Optional[str] = None
     model_number: Optional[str] = None
     serial_number: Optional[str] = None
     production_date: Optional[str] = None
 
-    # This field allows ANY asset-specific extra data
-    attributes: Dict[str, Any] = Field(default_factory=dict)
+    # AAS Submodels: Structured data instead of flat attributes
+    # We keep 'attributes' for backward compatibility but encourage 'submodels'
+    attributes: Dict[str, Any] = Field(default_factory=dict, description="Legacy flat attributes")
+    
+    submodels: List[AASSubmodel] = Field(
+        default_factory=list, 
+        description="List of AAS Submodels (e.g., CarbonFootprint, Circularity)"
+    )
 
     @field_validator("product_id", mode="before")
     @classmethod
@@ -60,6 +79,14 @@ class DPPStatus(BaseModel):
     dpp_uuid: str
     is_published: bool
     message: str
+
+
+class DPPStats(BaseModel):
+    """Schema for global DPP statistics."""
+    total_dpps: int
+    published_dpps: int
+    draft_dpps: int
+    my_dpps: int  # Count of DPPs owned by the current user
 
 
 # --- 3. SEARCH & SORTING SCHEMAS ---
@@ -172,8 +199,17 @@ class SearchSchema(BaseModel):
         sparql = values.get('sparql_query')
 
         # Simple Search check
-        if mode == SearchMode.SIMPLE and not keywords:
-            raise ValueError("Keywords must be provided for simple search mode.")
+        # Allow empty keywords for "list all" functionality
+        if mode == SearchMode.SIMPLE and keywords is None:
+             # If keywords is None, we can default it to empty string or handle it in logic.
+             # But the validator was raising error if not keywords.
+             # We should allow it if it's present but empty string?
+             # The frontend sends keywords="" which is truthy? No, empty string is falsy.
+             # So 'not keywords' is True for "".
+             
+             # We change this to allow empty string for simple search (meaning "all")
+             pass 
+
         if mode == SearchMode.SIMPLE and (criteria or sparql):
             raise ValueError("Advanced criteria or SPARQL query cannot be used in simple search mode.")
 
