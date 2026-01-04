@@ -27,9 +27,10 @@ app.include_router(auth.router)
 app.include_router(user.router)
 app.include_router(dpp_json.router)
 app.include_router(dpp_file.router)
-app.include_router(system.router)
 app.include_router(dpp_sparql.router)
 app.include_router(dpp_export.router)
+app.include_router(system.router)
+
 
 def custom_openapi():
     if app.openapi_schema:
