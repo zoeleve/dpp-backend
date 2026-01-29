@@ -47,8 +47,15 @@ async def export_dpp_pdf(dpp_id: int, db: AsyncSession = Depends(get_db)):
     c.setFont("Helvetica", 12)
     c.drawString(50, height - 80, f"ID: {dpp_record.id}")
     c.drawString(50, height - 100, f"UUID: {dpp_record.dpp_uuid}")
-    c.drawString(50, height - 120, f"Owner ID: {dpp_record.owner_id}")
-    c.drawString(50, height - 140, f"Status: {'Published' if dpp_record.is_published else 'Draft'}")
+    
+    # Removed Owner ID for privacy
+    # c.drawString(50, height - 120, f"Owner ID: {dpp_record.owner_id}")
+    
+    c.drawString(50, height - 120, f"Status: {'Published' if dpp_record.is_published else 'Draft'}")
+    
+    # Try to get Manufacturer from dpp_data
+    manufacturer = dpp_record.dpp_data.get("manufacturer", "N/A") if dpp_record.dpp_data else "N/A"
+    c.drawString(50, height - 140, f"Manufacturer: {manufacturer}")
 
     # Content (JSON Data)
     c.drawString(50, height - 170, "DPP Data:")

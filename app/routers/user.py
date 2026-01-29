@@ -72,7 +72,7 @@ async def filter_users(
 # ---------------------------------------------------------------------
 # CREATE USER
 # ---------------------------------------------------------------------
-@router.post("/", response_model=UserResponse)
+@router.post("/create", response_model=UserResponse)
 async def create_user(
     username: str = Form(...),
     email: str = Form(...),
@@ -195,3 +195,32 @@ async def delete_user(
     await db.delete(user)
     await db.commit()
     return {"message": f"User with ID {user_id} deleted successfully."}
+
+
+# ---------------------------------------------------------------------
+# UPDATE USER STATUS (ADMIN ONLY)
+# ---------------------------------------------------------------------
+@router.patch("/{user_id}/status")
+async def update_user_status(
+    user_id: int,
+    is_active: bool,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(role_checker([Role.ADMIN]))
+):
+    """
+    Activate or Deactivate a user account.
+    Only Admins can perform this action.
+    """
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Admins cannot deactivate themselves.")
+
+    user.is_active = is_active
+    await db.commit()
+    await db.refresh(user)
+    
+    status_msg = "activated" if is_active else "deactivated"
+    return {"message": f"User {user.username} has been {status_msg}."}

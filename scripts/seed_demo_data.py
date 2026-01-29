@@ -11,6 +11,7 @@ BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 LOGIN_URL = f"{BASE_URL}/auth/login"
 REGISTER_URL = f"{BASE_URL}/users/"
 API_URL = f"{BASE_URL}/dpp/json/"
+SEARCH_URL = f"{BASE_URL}/dpp/json/search"
 
 # Credentials
 USERNAME = os.getenv("API_USERNAME", "zoe")
@@ -26,8 +27,7 @@ def create_user():
         "role": "admin"
     }
     try:
-        # The registration endpoint uses Form data, not JSON
-        response = requests.post(REGISTER_URL, data=payload) 
+        response = requests.post(REGISTER_URL, data=payload)
         if response.status_code in [200, 201]:
             logging.info("✅ User created successfully!")
         elif response.status_code == 400 and "Email already registered" in response.text:
@@ -41,9 +41,7 @@ def create_user():
 
 def get_access_token():
     try:
-        # The login endpoint expects a JSON body with username and password
         response = requests.post(LOGIN_URL, json={"username": USERNAME, "password": PASSWORD})
-        
         if response.status_code == 200:
             token = response.json().get("access_token")
             logging.info("✅ Successfully authenticated!")
@@ -55,6 +53,27 @@ def get_access_token():
         logging.error(f"💥 Failed to connect to login: {str(e)}")
         return None
 
+def delete_all_dpps(token):
+    """Deletes all existing DPPs to start fresh."""
+    logging.info("🧹 Cleaning up old DPPs...")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        # Search for all DPPs
+        res = requests.post(SEARCH_URL, json={"search_mode": "simple", "keywords": " ", "limit": 100}, headers=headers)
+        if res.status_code == 200:
+            items = res.json().get("results", [])
+            logging.info(f"Found {len(items)} existing DPPs to delete.")
+            for item in items:
+                del_res = requests.delete(f"{API_URL}{item['id']}", headers=headers)
+                if del_res.status_code == 200:
+                    print(f"   Deleted ID {item['id']}")
+                else:
+                    print(f"   Failed to delete ID {item['id']}")
+        else:
+            logging.warning("Could not fetch existing DPPs for cleanup.")
+    except Exception as e:
+        logging.error(f"Cleanup failed: {e}")
 
 # --- NEW AAS-COMPLIANT DATASET (FULL LIST) ---
 dpp_data = [
@@ -364,8 +383,8 @@ def seed_database():
         "Content-Type": "application/json"
     }
 
-    # Step 3: Delete Old Data (Optional - Uncomment to wipe DB)
-    delete_all_dpps(token)
+    # Step 3: Delete Old Data (DISABLED FOR SAFETY)
+    # delete_all_dpps(token)
 
     logging.info(f"🚀 Starting seeding of {len(dpp_data)} items...")
     for item in dpp_data:

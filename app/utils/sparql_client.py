@@ -1,3 +1,4 @@
+# app/utils/sparql_client
 from typing import Dict, Any, List
 from fastapi import HTTPException, status
 import httpx
@@ -5,6 +6,8 @@ import json
 from app.models.user import User
 from app.configs.config import settings
 
+# Use the same stable URI as in rdf_converter.py
+RDF_BASE_URI = "http://dpp-platform.org"
 
 class SPARQLException(Exception):
     """Custom exception for SPARQL query/update failures."""
@@ -118,5 +121,34 @@ async def get_dpp_rdf_data(dpp_uri: str, format: str) -> str:
         if e.response.status_code == 404:
             return ""
         raise SPARQLException(f"Fuseki Data Fetch Error: {e.response.status_code}")
+    except httpx.RequestError as e:
+        raise SPARQLException(f"Could not connect to Fuseki data endpoint: {e}")
+
+async def update_fuseki_graph(dpp_uuid: str, rdf_data: str):
+    """
+    Uploads RDF data (Turtle format) to a named graph in Fuseki.
+    This effectively overwrites the graph for this specific DPP.
+    """
+    # We use the Graph Store Protocol (PUT) to replace the graph
+    headers = {
+        "Content-Type": "text/turtle"
+    }
+    
+    # Construct the Graph URI using the stable Base URI
+    graph_uri = f"{RDF_BASE_URI}/dpp/{dpp_uuid}"
+    
+    params = {
+        "graph": graph_uri
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # PUT replaces the entire graph
+            response = await client.put(settings.FUSEKI_DATA_URL, content=rdf_data, params=params, headers=headers)
+            response.raise_for_status()
+            return True
+            
+    except httpx.HTTPStatusError as e:
+        raise SPARQLException(f"Fuseki Graph Upload Error: {e.response.status_code} - {e.response.text}")
     except httpx.RequestError as e:
         raise SPARQLException(f"Could not connect to Fuseki data endpoint: {e}")

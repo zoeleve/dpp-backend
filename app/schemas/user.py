@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from app.configs.roles import Role, UserSubRole
 from typing import Optional
 
@@ -8,13 +8,13 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     role: Role = Role.USER
     subrole: Optional[UserSubRole] = None
+    is_active: bool = True
 
 
 class UserResponse(UserBase):
     id: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserUpdate(BaseModel):
@@ -22,6 +22,7 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     role: Optional[Role] = None
     subrole: Optional[UserSubRole] = None
+    is_active: Optional[bool] = None
 
 
 class PasswordUpdate(BaseModel):

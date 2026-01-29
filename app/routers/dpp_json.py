@@ -1,5 +1,5 @@
 # app/routers/dpp_json.py
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
@@ -19,9 +19,30 @@ from app.schemas.dpp import (
 )
 from app.utils.jwt_handler import get_current_active_user
 from app.utils.dpp_search_engine import search_dpps
+from app.utils.rdf_converter import convert_dpp_to_rdf
+from app.utils.sparql_client import update_fuseki_graph
 from loguru import logger
 
 router = APIRouter(prefix="/dpp/json", tags=["DPP JSON"])
+
+async def sync_dpp_to_fuseki(dpp: DPP):
+    """
+    Helper function to convert DPP to RDF and upload to Fuseki.
+    """
+    try:
+        rdf_data = convert_dpp_to_rdf(dpp)
+        await update_fuseki_graph(dpp.dpp_uuid, rdf_data)
+        logger.info(f"Successfully synced DPP {dpp.dpp_uuid} to Fuseki.")
+    except Exception as e:
+        logger.error(f"Failed to sync DPP {dpp.dpp_uuid} to Fuseki: {e}")
+
+def to_dpp_response(dpp: DPP, current_user: User) -> DPPResponse:
+    """
+    Converts SQLAlchemy DPP model to Pydantic DPPResponse and calculates is_owner.
+    """
+    response = DPPResponse.model_validate(dpp)
+    response.is_owner = (dpp.owner_id == current_user.id)
+    return response
 
 @router.get("/stats", response_model=DPPStats)
 async def get_dpp_stats(
@@ -29,38 +50,25 @@ async def get_dpp_stats(
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    Returns statistics for DPPs visible to the current user.
+    Returns global statistics for DPPs:
+    - Total count
+    - Published count
+    - Draft count
+    - My DPPs count (owned by current user)
     """
-    
-    # 1. Published DPPs (Visible to everyone)
+    # Total DPPs
+    total_query = select(func.count()).select_from(DPP)
+    total_count = (await db.execute(total_query)).scalar_one()
+
+    # Published DPPs
     published_query = select(func.count()).select_from(DPP).where(DPP.is_published == True)
     published_count = (await db.execute(published_query)).scalar_one()
 
-    # 2. Draft DPPs (Visibility depends on role)
-    if current_user.role == Role.ADMIN:
-        # Admin sees ALL drafts
-        draft_query = select(func.count()).select_from(DPP).where(DPP.is_published == False)
-    else:
-        # Regular users only see THEIR OWN drafts
-        draft_query = select(func.count()).select_from(DPP).where(
-            and_(DPP.is_published == False, DPP.owner_id == current_user.id)
-        )
+    # Draft DPPs
+    draft_query = select(func.count()).select_from(DPP).where(DPP.is_published == False)
     draft_count = (await db.execute(draft_query)).scalar_one()
 
-    # 3. Total DPPs (Visible)
-    # Logic: Total = Published + Visible Drafts
-    if current_user.role == Role.ADMIN:
-        total_query = select(func.count()).select_from(DPP)
-    else:
-        total_query = select(func.count()).select_from(DPP).where(
-            or_(
-                DPP.is_published == True,
-                DPP.owner_id == current_user.id
-            )
-        )
-    total_count = (await db.execute(total_query)).scalar_one()
-
-    # 4. My DPPs (Owned by current user, regardless of status)
+    # My DPPs
     my_dpps_query = select(func.count()).select_from(DPP).where(DPP.owner_id == current_user.id)
     my_dpps_count = (await db.execute(my_dpps_query)).scalar_one()
 
@@ -74,6 +82,7 @@ async def get_dpp_stats(
 @router.post("/", response_model=DPPResponse)
 async def create_dpp(
     dpp: DPPCreate, 
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -103,7 +112,11 @@ async def create_dpp(
     db.add(new_dpp)
     await db.commit()
     await db.refresh(new_dpp)
-    return new_dpp
+
+    # Sync to Fuseki in background
+    background_tasks.add_task(sync_dpp_to_fuseki, new_dpp)
+
+    return to_dpp_response(new_dpp, current_user)
 
 
 @router.get("/{dpp_id}", response_model=DPPResponse)
@@ -121,13 +134,14 @@ async def get_dpp(
         if not dpp.is_published and dpp.owner_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized to view this unpublished DPP")
 
-    return dpp
+    return to_dpp_response(dpp, current_user)
 
 
 @router.put("/{dpp_id}", response_model=DPPResponse)
 async def update_dpp(
     dpp_id: int, 
     update_data: DPPUpdate, 
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -164,12 +178,17 @@ async def update_dpp(
 
     await db.commit()
     await db.refresh(dpp)
-    return dpp
+
+    # Sync to Fuseki in background
+    background_tasks.add_task(sync_dpp_to_fuseki, dpp)
+
+    return to_dpp_response(dpp, current_user)
 
 
 @router.put("/{dpp_id}/publish", response_model=DPPStatus)
 async def publish_dpp(
         dpp_id: int,
+        background_tasks: BackgroundTasks,
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_active_user)
 ):
@@ -196,6 +215,9 @@ async def publish_dpp(
     await db.commit()
     await db.refresh(dpp)
 
+    # Sync to Fuseki in background (to update status)
+    background_tasks.add_task(sync_dpp_to_fuseki, dpp)
+
     return DPPStatus(
         dpp_uuid=dpp.dpp_uuid,
         is_published=True,
@@ -206,6 +228,7 @@ async def publish_dpp(
 @router.put("/{dpp_id}/unpublish", response_model=DPPStatus)
 async def unpublish_dpp(
         dpp_id: int,
+        background_tasks: BackgroundTasks,
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_active_user)
 ):
@@ -232,6 +255,9 @@ async def unpublish_dpp(
     await db.commit()
     await db.refresh(dpp)
 
+    # Sync to Fuseki in background (to update status)
+    background_tasks.add_task(sync_dpp_to_fuseki, dpp)
+
     return DPPStatus(
         dpp_uuid=dpp.dpp_uuid,
         is_published=False,
@@ -252,6 +278,10 @@ async def delete_dpp(
     # Ownership Check: Only owner or Admin can delete
     if current_user.role != Role.ADMIN and dpp.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this DPP")
+
+    # TODO: Also delete from Fuseki?
+    # For now, we just delete from PostgreSQL. 
+    # To delete from Fuseki, we would need a DELETE SPARQL update.
 
     await db.delete(dpp)
     await db.commit()
@@ -293,7 +323,8 @@ async def search_dpp_entries(
             dpps, total_count = await search_dpps(db, search_data, current_user)
 
             # Map DPP SQLAlchemy objects to DPPResponse Pydantic schemas
-            response_results = [DPPResponse.from_orm(dpp) for dpp in dpps]
+            # Use to_dpp_response helper to calculate is_owner
+            response_results = [to_dpp_response(dpp, current_user) for dpp in dpps]
 
             return SearchResponse(
                 total_count=total_count,

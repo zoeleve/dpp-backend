@@ -1,0 +1,45 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: localhost
+        refresh_interval: 5s
+        # Only look for containers in the current docker-compose project
+        # This assumes your docker-compose project name is 'dpp-backend'
+        # You might need to adjust this if your project name is different
+        # You can find your project name by running `docker-compose config --services`
+        # and looking at the container names (e.g., dpp-backend-backend-1)
+        # The project name is the first part.
+        # If running on Linux, use unix:///var/run/docker.sock
+        # If running on Windows/Mac, use npipe:///./pipe/docker_engine or tcp://host.docker.internal:2375
+        # For Windows/Mac, host.docker.internal is usually the way to go.
+        # Let's assume Windows/Mac for now.
+        
+        # For Windows/Mac, use the following:
+        # host: "npipe:///./pipe/docker_engine" # For Windows
+        # host: "unix:///var/run/docker.sock" # For Linux
+        
+        # Let's use the default for docker_sd_configs which usually works for local Docker Desktop
+        
+    relabel_configs:
+      # Add all docker labels to the log stream
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_image']
+        target_label: 'image'
+      - source_labels: ['__meta_docker_container_id']
+        target_label: 'instance'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'job'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'project'

@@ -4,6 +4,7 @@ from fastapi.openapi.utils import get_openapi
 from app.configs.config import settings
 from app.routers import user, system, auth, dpp_json, dpp_file, dpp_sparql, dpp_export
 from app.db.database_postgre import Base, engine
+from prometheus_fastapi_instrumentator import Instrumentator
 
 app = FastAPI(title=settings.app_name)
 
@@ -15,6 +16,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Instrument FastAPI for Prometheus
+Instrumentator().instrument(app).expose(app)
 
 @app.on_event("startup")
 async def startup():

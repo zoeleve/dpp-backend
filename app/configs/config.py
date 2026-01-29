@@ -31,11 +31,13 @@ class Settings(BaseSettings):
     @property
     def FUSEKI_QUERY_URL(self) -> str:
         """Full URL for SPARQL SELECT/CONSTRUCT queries."""
-        return f"{self.FUSEKI_ENDPOINT}/query"
+        # Updated to /sparql based on probe results for secoresearch/fuseki
+        return f"{self.FUSEKI_ENDPOINT}/sparql"
 
     @property
     def FUSEKI_UPDATE_URL(self) -> str:
         """Full URL for SPARQL INSERT/DELETE updates."""
+        # Assuming /update works, but if query is /sparql, update might be /update or /sparql too
         return f"{self.FUSEKI_ENDPOINT}/update"
 
     @property

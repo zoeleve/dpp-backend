@@ -1,7 +1,7 @@
 # app/schemas/dpp.py
 from typing import Optional, Dict, Any, List
 from enum import Enum
-from pydantic import BaseModel, Field, constr, field_validator, model_validator
+from pydantic import BaseModel, Field, constr, field_validator, model_validator, ConfigDict
 from datetime import datetime
 
 
@@ -61,7 +61,8 @@ class DPPResponse(DPPBase):
     """Full DPP response schema including database metadata."""
     id: int
     dpp_uuid: str
-    owner_id: int
+    # owner_id removed for security
+    is_owner: bool = False # Calculated field
     title: str
     is_published: bool
     created_at: datetime
@@ -70,8 +71,52 @@ class DPPResponse(DPPBase):
     # We will use this field to return the full JSONB data in the response
     dpp_data: Dict[str, Any]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode='before')
+    def populate_fields_from_dpp_data(cls, values):
+        """
+        Populates the top-level fields (manufacturer, model_number, etc.) 
+        from the 'dpp_data' JSONB column if they are missing in the root object.
+        """
+        # 'values' is usually an object (SQLAlchemy model) or a dict
+        
+        # 1. Get dpp_data
+        dpp_data = getattr(values, 'dpp_data', {})
+        if not dpp_data:
+            # Even if dpp_data is empty, we might need to map dpp_uuid -> product_id
+            pass
+
+        # 2. Extract fields from dpp_data if they exist there
+        # We check if the attribute on 'values' is None/Missing, and if so, fill it from dpp_data
+        
+        # Helper to set attribute if missing
+        def set_if_missing(field_name, json_key=None):
+            json_key = json_key or field_name
+            current_val = getattr(values, field_name, None)
+            if current_val is None and dpp_data and json_key in dpp_data:
+                setattr(values, field_name, dpp_data[json_key])
+
+        # Apply to core fields
+        set_if_missing('manufacturer')
+        set_if_missing('model_number')
+        set_if_missing('serial_number')
+        set_if_missing('production_date')
+        
+        # Map dpp_uuid to product_id if product_id is missing
+        if not getattr(values, 'product_id', None):
+             dpp_uuid = getattr(values, 'dpp_uuid', None)
+             if dpp_uuid:
+                 setattr(values, 'product_id', dpp_uuid)
+        
+        # Also populate submodels/attributes if they are in dpp_data but not on the object
+        if not getattr(values, 'submodels', None) and dpp_data and 'submodels' in dpp_data:
+             setattr(values, 'submodels', dpp_data['submodels'])
+             
+        if not getattr(values, 'attributes', None) and dpp_data and 'attributes' in dpp_data:
+             setattr(values, 'attributes', dpp_data['attributes'])
+
+        return values
 
 
 class DPPStatus(BaseModel):

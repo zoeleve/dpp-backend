@@ -1,54 +1,92 @@
-version: '3.8'
-
 services:
-  # 1. PostgreSQL Database Service
-  db:
-    image: postgres:15-alpine
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: dpp_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck: # Health check to ensure DB is ready before backend starts
-      test: ["CMD-SHELL", "pg_isready -U postgres -d dpp_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # 2. Apache Jena Fuseki Service (Semantic Store)
+  # 1. Apache Jena Fuseki Service (Semantic Store)
   fuseki:
-    image: stain/jena-fuseki:latest
+    image: secoresearch/fuseki:latest
     restart: always
     ports:
-      - "3030:3030" # Expose the Fuseki port to the host
+      - "3030:3030" # Expose for direct access if needed
     environment:
       ADMIN_PASSWORD: admin
-      FUSEKI_DATASET_1: dpp_dataset
+    # Use persistent storage (TDB2) instead of --mem
+    # --loc=/fuseki/databases/ds tells Fuseki to store data in the volume
+    command: ["/jena-fuseki/fuseki-server", "--update", "--mem", "/dpp"]
+    networks:
+      - dpp-net
     volumes:
       # Persistent storage for the RDF data
       - fuseki_data:/fuseki
 
-  # 3. FastAPI Backend Service (Your Application)
+  # 2. FastAPI Backend Service (Your Application)
   backend:
     build: . # Builds the application using the Dockerfile in the current directory
     restart: always
     ports:
-      - "8000:8000"
+      - "8000:8000" # Expose for direct access if needed
     depends_on:
-      db:
-        condition: service_healthy # Wait for PostgreSQL to be ready
       fuseki:
         condition: service_started # Wait for Fuseki to start
     env_file:
       - .env # Load environment variables from the .env file
     environment:
-      POSTGRES_SERVER: db
+      # POSTGRES_SERVER is now handled via .env pointing to Supabase
       FUSEKI_HOST: fuseki
+    networks:
+      - dpp-net
+
+  # 3. React Frontend Service
+  frontend:
+    build:
+      context: ../dpp-frontend  # Assumes dpp-frontend is a sibling directory
+      dockerfile: Dockerfile
+    restart: always
+    # No ports exposed directly, Nginx handles it via internal network
+    depends_on:
+      - backend
+    networks:
+      - dpp-net
+
+  # 4. Nginx Reverse Proxy (Localhost Gateway)
+  nginx:
+    image: nginx:latest
+    restart: always
+    ports:
+      - "80:80" # Main entry point: http://localhost
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - fuseki
+      - frontend
+    networks:
+      - dpp-net
+
+  # 5. Prometheus (Metrics Collector)
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - dpp-net
+
+  # 6. Grafana (Visualization Dashboard)
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "3001:3000" # Expose Grafana on port 3001
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - dpp-net
+    depends_on:
+      - prometheus
+
+networks:
+  dpp-net:
+    driver: bridge
 
 volumes:
-  postgres_data:
   fuseki_data:

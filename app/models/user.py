@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum
+from sqlalchemy import Column, Integer, String, Enum, Boolean
 from pydantic import BaseModel
 from app.db.database_postgre import Base
 from app.configs.roles import Role, UserSubRole
@@ -14,6 +14,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(Enum(Role), default=Role.USER, nullable=False)
     subrole = Column(Enum(UserSubRole), nullable=True)  # "admin", "technician", "manufacturer"
+    is_active = Column(Boolean, default=True, nullable=False)
 
 
 class LoginRequest(BaseModel):

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from app.configs.config import settings
 from fastapi import Depends, HTTPException, status
@@ -13,12 +13,13 @@ security = HTTPBearer()
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    # Use timezone-aware UTC datetime
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-async def get_current_active_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: AsyncSession = Depends(get_db)) -> UserResponse:
+async def get_current_active_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: AsyncSession = Depends(get_db)) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -38,4 +39,9 @@ async def get_current_active_user(credentials: HTTPAuthorizationCredentials = De
 
     if user is None:
         raise credentials_exception
-    return UserResponse.from_orm(user)
+
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+
+    # Return the ORM object directly so we can access all fields (like role)
+    return user
