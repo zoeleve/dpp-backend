@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
+from pydantic import EmailStr
 from app.models.user import User
 from app.schemas.user import UserResponse, UserUpdate, PasswordUpdate
 from app.utils.security import hash_password
@@ -15,15 +16,26 @@ router = APIRouter(prefix="/users", tags=["Users"])
 # READ USERS
 # ---------------------------------------------------------------------
 @router.get("/all", response_model=List[UserResponse])
-async def get_users(db: AsyncSession = Depends(get_db)):
+async def get_users(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(role_checker(Role.ADMIN))
+):
+    """
+    Get all users. Only Admins can access this.
+    """
     result = await db.execute(select(User))
     return result.scalars().all()
 
 
 @router.get("/paginated", response_model=List[UserResponse])
-async def get_paginated_users(skip: int = 0, limit: int = 10, db: AsyncSession = Depends(get_db)):
+async def get_paginated_users(
+    skip: int = 0, 
+    limit: int = 10, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(role_checker(Role.ADMIN))
+):
     """
-    Return users in paginated form.
+    Return users in paginated form. Only Admins.
     Example:
       /users/paginated?skip=0&limit=10
     """
@@ -32,8 +44,16 @@ async def get_paginated_users(skip: int = 0, limit: int = 10, db: AsyncSession =
 
 
 @router.get("/{user_id}", response_model=UserResponse)
-async def get_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
-    """Get user details by ID."""
+async def get_user_by_id(
+    user_id: int, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get user details by ID. Users can see themselves, Admins can see everyone."""
+    
+    if current_user.role != Role.ADMIN and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this user")
+
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -47,12 +67,10 @@ async def filter_users(
     email: Optional[str] = None,
     username: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(role_checker(Role.ADMIN))
 ):
     """
-    Filter users dynamically based on role, subrole, email, or username.
-    Example:
-      /users/filter?role=technician
-      /users/filter?email=@core-innovation.eu
+    Filter users dynamically. Only Admins.
     """
     query = select(User)
 
@@ -70,26 +88,85 @@ async def filter_users(
 
 
 # ---------------------------------------------------------------------
-# CREATE USER
+# PUBLIC REGISTRATION (Sign Up)
 # ---------------------------------------------------------------------
 @router.post("/create", response_model=UserResponse)
 async def create_user(
     username: str = Form(...),
-    email: str = Form(...),
+    email: EmailStr = Form(...),
     full_name: str = Form(None),
     password: str = Form(...),
     role: Role = Form(Role.USER),
     subrole: Optional[UserSubRole] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new user."""
+    """
+    Public Sign Up.
+    RESTRICTIONS:
+    - Cannot create ADMIN accounts.
+    - Cannot create MANUFACTURER subroles (requires verification).
+    """
+    # SECURITY: Prevent Admin creation
+    if role == Role.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Admin creation is not allowed via public registration."
+        )
+    
+    # SECURITY: Prevent Manufacturer creation (optional, but good practice)
+    if subrole == UserSubRole.MANUFACTURER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Manufacturer accounts must be created by an Admin."
+        )
+
     result = await db.execute(select(User).filter(User.email == email))
     existing_user = result.scalar_one_or_none()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    if subrole == "" or role in [Role.ADMIN, Role.VIEWER]:
+    if subrole == "" or role == Role.VIEWER:
         subrole = None
+
+    hashed_pw = hash_password(password)
+
+    new_user = User(
+        username=username,
+        email=email,
+        full_name=full_name,
+        hashed_password=hashed_pw,
+        role=role.value,
+        subrole=subrole.value if subrole else None,
+    )
+
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
+
+
+# ---------------------------------------------------------------------
+# ADMIN USER CREATION
+# ---------------------------------------------------------------------
+@router.post("/admin/create", response_model=UserResponse)
+async def create_user_by_admin(
+    username: str = Form(...),
+    email: EmailStr = Form(...),
+    full_name: str = Form(None),
+    password: str = Form(...),
+    role: Role = Form(...),
+    subrole: Optional[UserSubRole] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(role_checker(Role.ADMIN))
+):
+    """
+    Create ANY user (Admin, Manufacturer, etc.).
+    Only accessible by existing Admins.
+    """
+    result = await db.execute(select(User).filter(User.email == email))
+    existing_user = result.scalar_one_or_none()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
     hashed_pw = hash_password(password)
 
@@ -136,6 +213,10 @@ async def update_user(
 
     # Update fields dynamically
     for field, value in user_update.model_dump(exclude_unset=True).items():
+        # SECURITY: Prevent users from promoting themselves to ADMIN
+        if field == "role" and value == Role.ADMIN and current_user.role != Role.ADMIN:
+             raise HTTPException(status_code=403, detail="You cannot promote yourself to Admin.")
+             
         setattr(user, field, value)
 
     await db.commit()
@@ -205,7 +286,7 @@ async def update_user_status(
     user_id: int,
     is_active: bool,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(role_checker([Role.ADMIN]))
+    current_user: User = Depends(role_checker(Role.ADMIN))
 ):
     """
     Activate or Deactivate a user account.

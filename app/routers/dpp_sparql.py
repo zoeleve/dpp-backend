@@ -32,8 +32,11 @@ async def sparql_query_execution(
     - Queries MUST specify target graphs explicitly (via URIs in the query).
     """
 
-    # 1. Basic Query Validation
-    if not request.query.upper().strip().startswith("SELECT"):
+    # 1. Basic Query Validation (Allow PREFIXes)
+    # Remove PREFIX lines to check for SELECT
+    clean_query = re.sub(r"(?i)PREFIX\s+[\w-]+:\s*<[^>]+>", "", request.query).strip()
+    
+    if not clean_query.upper().startswith("SELECT"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only SPARQL SELECT queries are allowed for this endpoint."

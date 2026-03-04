@@ -17,8 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Instrument FastAPI for Prometheus
-Instrumentator().instrument(app).expose(app)
+
 
 @app.on_event("startup")
 async def startup():
@@ -35,6 +34,8 @@ app.include_router(dpp_sparql.router)
 app.include_router(dpp_export.router)
 app.include_router(system.router)
 
+# Instrument FastAPI for Prometheus
+Instrumentator().instrument(app).expose(app)
 
 def custom_openapi():
     if app.openapi_schema:

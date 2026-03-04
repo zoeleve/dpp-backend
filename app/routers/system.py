@@ -1,46 +1,63 @@
 import os
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from datetime import datetime
 from app.db.database_postgre import get_db
 from app.configs.config import settings
 from app.utils.auth import role_checker
+from app.configs.roles import Role
 from app.utils.logger import LOG_FILE_PATH
 
 router = APIRouter(prefix="/system", tags=["System"])
 
 @router.get("/")
-def read_root():
-    return {"message": "DPP Management Platform is running!"}
+async def read_root():
+    return {"message": "DPP Management Platform is running!", "timestamp": datetime.utcnow()}
 
-@router.get("/ping-db")
-def ping_db(db: Session = Depends(get_db)):
+@router.get("/health")
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """
+    Checks the health of the API and Database connection.
+    """
     try:
-        result = db.execute(text("SELECT 1"))
-        return {"status": "connected", "result": [tuple(row) for row in result]}
+        # Execute a simple query to check DB connection
+        result = await db.execute(text("SELECT 1"))
+        return {
+            "status": "ok",
+            "database": "connected",
+            "timestamp": datetime.utcnow()
+        }
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return {
+            "status": "error",
+            "database": "disconnected",
+            "detail": str(e)
+        }
 
 
 @router.get("/logs")
-def get_system_logs(current_user=Depends(role_checker("admin"))):
+async def get_system_logs(current_user=Depends(role_checker(Role.ADMIN))):
     """
     Returns the last 50 log lines from the backend log file.
+    Only Admins can access this.
     """
-    if not os.path.exists(LOG_FILE_PATH):
-        return {"logs": ["No logs found."]}
+    if not LOG_FILE_PATH or not os.path.exists(LOG_FILE_PATH):
+        return {"logs": ["Log file not found or not configured."]}
 
-    with open(LOG_FILE_PATH, "r") as file:
-        lines = file.readlines()[-50:]
-
-    return {"logs": [line.strip() for line in lines]}
+    try:
+        with open(LOG_FILE_PATH, "r", encoding="utf-8") as file:
+            lines = file.readlines()[-50:]
+        return {"logs": [line.strip() for line in lines]}
+    except Exception as e:
+        return {"logs": [f"Error reading logs: {str(e)}"]}
 
 
 @router.get("/config")
-def get_system_config(current_user=Depends(role_checker("admin"))):
+async def get_system_config(current_user=Depends(role_checker(Role.ADMIN))):
     """
     Returns safe system configuration details (excluding secrets and passwords).
+    Only Admins can access this.
     """
     return {
         "app_name": settings.APP_NAME,
