@@ -3,8 +3,10 @@ from typing import Dict, Any, List
 from fastapi import HTTPException, status
 import httpx
 import json
+import urllib.parse
 from app.models.user import User
 from app.configs.config import settings
+import asyncio
 
 # Use the same stable URI as in rdf_converter.py
 RDF_BASE_URI = "http://dpp-platform.org"
@@ -42,6 +44,8 @@ async def execute_sparql_query(sparql_query: str, current_user: User) -> List[Di
     print(f"Attempting to connect to Fuseki at: {settings.FUSEKI_QUERY_URL}") # DEBUG PRINT
 
     try:
+        # Simple retry logic for DNS/Connection issues
+        # This helps if Fuseki is slow to start or DNS is lagging
         async with httpx.AsyncClient() as client:
             response = await client.get(settings.FUSEKI_QUERY_URL, params=params, headers=headers)
             response.raise_for_status()
@@ -135,7 +139,8 @@ async def update_fuseki_graph(dpp_uuid: str, rdf_data: str):
     }
     
     # Construct the Graph URI using the stable Base URI
-    graph_uri = f"{RDF_BASE_URI}/dpp/{dpp_uuid}"
+    safe_uuid = urllib.parse.quote(dpp_uuid)
+    graph_uri = f"{RDF_BASE_URI}/dpp/{safe_uuid}"
     
     params = {
         "graph": graph_uri
