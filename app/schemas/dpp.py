@@ -16,6 +16,37 @@ class AASSubmodel(BaseModel):
     semanticId: Optional[str] = Field(None, description="Reference to the semantic definition (e.g., ECLASS IRDI)")
     submodelElements: Dict[str, Any] = Field(default_factory=dict, description="Key-value pairs of data elements")
 
+    @field_validator("semanticId", mode="before")
+    @classmethod
+    def extract_semantic_id(cls, v):
+        """Extracts the actual semantic ID string from the AAS Reference object."""
+        if isinstance(v, dict):
+            # Handle xmltodict structure for AAS Reference
+            # Structure: <semanticId><keys><key type="..." value="..."/></keys></semanticId>
+            # Parsed: {'keys': {'key': {'@type': '...', '@value': '...'}}}
+            
+            keys_container = v.get("keys")
+            if isinstance(keys_container, dict):
+                key_entry = keys_container.get("key")
+                
+                # Handle list of keys (take first) or single key dict
+                if isinstance(key_entry, list) and len(key_entry) > 0:
+                    key_entry = key_entry[0]
+                
+                if isinstance(key_entry, dict):
+                    # xmltodict uses @value for attributes, or value for elements
+                    return key_entry.get("value") or key_entry.get("@value") or key_entry.get("#text")
+            
+            # Handle standard JSON AAS serialization
+            # { "keys": [ { "type": "...", "value": "..." } ] }
+            if isinstance(keys_container, list) and len(keys_container) > 0:
+                 return keys_container[0].get("value")
+            
+            # If dict but couldn't extract, return None to avoid validation error
+            return None
+
+        return v
+
 
 class DPPBase(BaseModel):
     # Core universally valid DPP identifiers (AAS AssetInformation)
@@ -42,6 +73,14 @@ class DPPBase(BaseModel):
     def empty_to_none(cls, v):
         if not v or (isinstance(v, str) and not v.strip()):
             return None
+        return v
+
+    @field_validator("submodels", mode="before")
+    @classmethod
+    def empty_string_to_list(cls, v):
+        """Converts empty strings to empty list to handle form data issues."""
+        if isinstance(v, str) and not v.strip():
+            return []
         return v
 
 
@@ -177,6 +216,26 @@ class AdvancedCriteria(BaseModel):
     # Logic for multiple values (e.g., in a list field): 'all' or 'any'
     multi_value_logic: Optional[constr(pattern=r"^(all|any)$")] = "any"
 
+    @field_validator("comparison_operator", mode="before")
+    @classmethod
+    def map_operator_aliases(cls, v):
+        """
+        Allows short names for comparison operators (e.g., 'gt' for '>')
+        to make the API more flexible for frontend clients.
+        """
+        if not v or not isinstance(v, str):
+            return v
+
+        alias_map = {
+            "eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="
+        }
+
+        # If the input is a short name (e.g., "gt"), convert it
+        if v.lower() in alias_map:
+            return alias_map[v.lower()]
+
+        return v
+
 
 class SortingWeight(BaseModel):
     """Defines a field and its weight for weighted ranking."""
@@ -189,6 +248,9 @@ class SortingWeight(BaseModel):
 
     # Direction of partial utility (e.g., 'asc' for higher is better, 'desc' for lower is better)
     direction: constr(pattern=r"^(asc|desc)$") = "asc"
+
+    # Option to apply Min-Max normalization to the values before weighting
+    normalize: bool = False
 
 
 class SearchSchema(BaseModel):
