@@ -212,3 +212,13 @@ __marimo__/
 # Custom
 /logs/
 /uploads/
+
+# Environment variables (secrets)
+.env
+.env.*
+!.env.example
+
+# Proprietary business logic
+app/utils/dpp_search_engine.py
+app/utils/generic_extractor.py
+app/utils/rdf_converter.py
