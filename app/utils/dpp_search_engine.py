@@ -1,6 +1,6 @@
 # app/utils/dpp_search_engine.py
 from typing import List, Any
-from sqlalchemy import select, func, or_, and_, asc, desc, text, cast, String, Float
+from sqlalchemy import select, func, or_, and_, asc, desc, text, cast, String, Float, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import BinaryExpression, TextClause
 from app.models.dpp import DPP
@@ -196,12 +196,32 @@ async def search_dpps(
             # Use PostgreSQL to extract and cast the value
             field_value_num = cast(DPP.dpp_data[item.field_key], Float)
 
-            # Simple linear utility: score = weight * value
-            utility = item.weight * field_value_num
+            if item.normalize:
+                # Min-Max Normalization: (X - Min) / (Max - Min)
+                # We use window functions over the current result set to get Min/Max dynamically
+                f_min = func.min(field_value_num).over()
+                f_max = func.max(field_value_num).over()
+                denominator = f_max - f_min
 
-            # If direction is 'desc', use negative utility (or simply reverse sorting direction)
-            if item.direction == 'desc':
-                utility = item.weight * (1.0 / field_value_num)  # Example inverse relationship
+                # Avoid division by zero if all values are the same
+                normalized_val = case(
+                    (denominator == 0, 0.0),
+                    else_=(field_value_num - f_min) / denominator
+                )
+
+                if item.direction == 'desc':
+                    # Lower is better (e.g., CO2): Score = Weight * (1 - Normalized)
+                    utility = item.weight * (1.0 - normalized_val)
+                else:
+                    # Higher is better (e.g., Efficiency): Score = Weight * Normalized
+                    utility = item.weight * normalized_val
+            else:
+                # Raw value usage (Legacy/Simple)
+                if item.direction == 'desc':
+                    # Inverse relationship: 1 / value (Handle div by zero)
+                    utility = item.weight * (1.0 / func.nullif(field_value_num, 0))
+                else:
+                    utility = item.weight * field_value_num
 
             score_clauses.append(utility)
 

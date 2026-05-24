@@ -2,6 +2,7 @@ from rdflib import Graph, Literal, RDF, URIRef, Namespace
 from rdflib.namespace import XSD, DCTERMS, FOAF
 from app.models.dpp import DPP
 from app.configs.config import settings
+import urllib.parse
 
 # Define Namespaces
 # Use a stable URI for the data, independent of the infrastructure hostname
@@ -22,7 +23,8 @@ def convert_dpp_to_rdf(dpp: DPP) -> str:
         g.bind("schema", SCHEMA)
 
         # Define the Subject URI
-        dpp_uri = DPP_NS[str(dpp.dpp_uuid)]
+        safe_uuid = urllib.parse.quote(str(dpp.dpp_uuid))
+        dpp_uri = DPP_NS[safe_uuid]
 
         # Add Basic Triples
         g.add((dpp_uri, RDF.type, AAS.AssetAdministrationShell))
@@ -43,7 +45,13 @@ def convert_dpp_to_rdf(dpp: DPP) -> str:
         if data and isinstance(data, dict):
             # Manufacturer
             if "manufacturer" in data and data["manufacturer"]:
-                g.add((dpp_uri, SCHEMA.manufacturer, Literal(data["manufacturer"])))
+                # Create a stable, deterministic URI for the organization to enable entity re-use
+                org_name_safe = urllib.parse.quote(data["manufacturer"].replace(" ", "_"))
+                org_uri = DPP_NS[f"org/{org_name_safe}"]
+                
+                g.add((dpp_uri, SCHEMA.manufacturer, org_uri))
+                g.add((org_uri, RDF.type, SCHEMA.Organization))
+                g.add((org_uri, SCHEMA.name, Literal(data["manufacturer"], datatype=XSD.string)))
             
             # Model Number
             if "model_number" in data and data["model_number"]:
@@ -57,7 +65,8 @@ def convert_dpp_to_rdf(dpp: DPP) -> str:
 
                     # Create a URI for the Submodel
                     sm_id = sm.get("idShort", "UnknownSubmodel").replace(" ", "_")
-                    sm_uri = DPP_NS[f"{dpp.dpp_uuid}/{sm_id}"]
+                    safe_sm_id = urllib.parse.quote(sm_id)
+                    sm_uri = DPP_NS[f"{safe_uuid}/{safe_sm_id}"]
                     
                     # Link DPP to Submodel
                     g.add((dpp_uri, AAS.submodel, sm_uri))
@@ -65,14 +74,18 @@ def convert_dpp_to_rdf(dpp: DPP) -> str:
                     g.add((sm_uri, DCTERMS.title, Literal(sm.get("idShort", "Unknown"))))
                     
                     if "semanticId" in sm and sm["semanticId"]:
-                        g.add((sm_uri, AAS.semanticId, URIRef(sm["semanticId"])))
+                        parsed_sid = urllib.parse.urlparse(sm["semanticId"])
+                        if parsed_sid.scheme in ("http", "https", "urn"):
+                            g.add((sm_uri, AAS.semanticId, URIRef(sm["semanticId"])))
 
                     # Add Submodel Elements
                     elements = sm.get("submodelElements", {})
                     if elements and isinstance(elements, dict):
                         for key, value in elements.items():
-                            # Simple key-value mapping for elements
-                            g.add((sm_uri, AAS.submodelElement, Literal(f"{key}: {value}")))
+                            # Create a unique predicate for each submodel element key.
+                            # This makes SPARQL queries much more powerful.
+                            predicate = DPP_NS[key]
+                            g.add((sm_uri, predicate, Literal(str(value))))
 
         # Return as Turtle format string
         return g.serialize(format="turtle")

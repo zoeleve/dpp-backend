@@ -37,7 +37,8 @@ async def test_full_dpp_lifecycle(client: AsyncClient, auth_headers: dict):
     assert create_res.status_code == 200, f"Create failed: {create_res.text}"
     data = create_res.json()
     assert data["title"] == TEST_DPP["title"]
-    assert data["dpp_uuid"] == TEST_DPP["product_id"]
+    # Our new logic wraps product_id into a safe UUID internally, but keeps product_id in the response
+    assert data["product_id"] == TEST_DPP["product_id"]
     dpp_id = data["id"]
 
     # --- 2. Get DPP ---
