@@ -2,19 +2,22 @@ services:
   # 1. Apache Jena Fuseki Service (Semantic Store)
   fuseki:
     image: secoresearch/fuseki:latest
+    user: root
     restart: always
     ports:
       - "3030:3030" # Expose for direct access if needed
     environment:
       ADMIN_PASSWORD: admin
-    # Use persistent storage (TDB2) instead of --mem
-    # --loc=/fuseki/databases/ds tells Fuseki to store data in the volume
-    command: ["/jena-fuseki/fuseki-server", "--update", "--mem", "/dpp"]
+    # The secoresearch/fuseki image has its own entrypoint. 
+    # Let's remove the command entirely and let it use its default.
+    # It usually creates an in-memory dataset or we can create it via UI.
+    # To use TDB2 persistently without command line issues, we can mount a config file
+    # or just let it start and we will see.
     networks:
       - dpp-net
     volumes:
-      # Persistent storage for the RDF data
-      - fuseki_data:/fuseki
+      # Persistent storage for the RDF data, mounted to the default /fuseki directory
+      - fuseki_data:/fuseki/databases
 
   # 2. FastAPI Backend Service (Your Application)
   backend:
@@ -23,13 +26,12 @@ services:
     ports:
       - "8000:8000" # Expose for direct access if needed
     depends_on:
-      fuseki:
-        condition: service_started # Wait for Fuseki to start
+      - fuseki # Changed to simple dependency instead of healthcheck
     env_file:
       - .env # Load environment variables from the .env file
-    environment:
-      # POSTGRES_SERVER is now handled via .env pointing to Supabase
-      FUSEKI_HOST: fuseki
+    volumes:
+      # Persist uploaded files (AASX, images, PDFs) across builds
+      - dpp_uploads:/app/uploads
     networks:
       - dpp-net
 
@@ -55,7 +57,6 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - backend
-      - fuseki
       - frontend
     networks:
       - dpp-net
@@ -68,6 +69,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
     networks:
       - dpp-net
 
@@ -76,17 +78,66 @@ services:
     image: grafana/grafana:latest
     restart: always
     ports:
-      - "3001:3000" # Expose Grafana on port 3001
+      - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     networks:
       - dpp-net
     depends_on:
       - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  # 7. Loki (Log Aggregation)
+  loki:
+    image: grafana/loki:latest
+    restart: always
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - dpp-net
+    volumes:
+      - loki_data:/loki
+
+  # 8. Promtail (Log Collector)
+  promtail:
+    image: grafana/promtail:latest
+    restart: always
+    volumes:
+      - ./promtail-config.yaml:/etc/promtail/config.yml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - dpp-net
+    depends_on:
+      - loki
+
+  # 9. Node Exporter (System Metrics)
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: always
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command: 
+      - '--path.procfs=/host/proc' 
+      - '--path.sysfs=/host/sys'
+    networks:
+      - dpp-net
 
 networks:
   dpp-net:
     driver: bridge
 
 volumes:
+  postgres_data:
   fuseki_data:
+  prometheus_data:
+  grafana_data:
+  dpp_uploads:
+  loki_data:
