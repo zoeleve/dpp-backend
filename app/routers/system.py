@@ -12,13 +12,21 @@ from app.utils.logger import LOG_FILE_PATH
 router = APIRouter(prefix="/system", tags=["System"])
 
 @router.get("/")
-async def read_root():
+async def read_root(current_user=Depends(role_checker(Role.ADMIN))):
+    """
+    Returns a basic message confirming the API is running.
+    Only Admins can access this.
+    """
     return {"message": "DPP Management Platform is running!", "timestamp": datetime.utcnow()}
 
 @router.get("/health")
-async def health_check(db: AsyncSession = Depends(get_db)):
+async def health_check(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(role_checker(Role.ADMIN))
+):
     """
     Checks the health of the API and Database connection.
+    Only Admins can access this.
     """
     try:
         # Execute a simple query to check DB connection
