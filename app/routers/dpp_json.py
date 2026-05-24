@@ -114,7 +114,8 @@ async def create_dpp(
     await db.refresh(new_dpp)
 
     # Sync to Fuseki in background
-    background_tasks.add_task(sync_dpp_to_fuseki, new_dpp)
+    # TEMPORARILY DISABLED: Fuseki is offline
+    # background_tasks.add_task(sync_dpp_to_fuseki, new_dpp)
 
     return to_dpp_response(new_dpp, current_user)
 
@@ -180,7 +181,8 @@ async def update_dpp(
     await db.refresh(dpp)
 
     # Sync to Fuseki in background
-    background_tasks.add_task(sync_dpp_to_fuseki, dpp)
+    # TEMPORARILY DISABLED: Fuseki is offline
+    # background_tasks.add_task(sync_dpp_to_fuseki, dpp)
 
     return to_dpp_response(dpp, current_user)
 
@@ -216,7 +218,8 @@ async def publish_dpp(
     await db.refresh(dpp)
 
     # Sync to Fuseki in background (to update status)
-    background_tasks.add_task(sync_dpp_to_fuseki, dpp)
+    # TEMPORARILY DISABLED: Fuseki is offline
+    # background_tasks.add_task(sync_dpp_to_fuseki, dpp)
 
     return DPPStatus(
         dpp_uuid=dpp.dpp_uuid,
@@ -256,7 +259,8 @@ async def unpublish_dpp(
     await db.refresh(dpp)
 
     # Sync to Fuseki in background (to update status)
-    background_tasks.add_task(sync_dpp_to_fuseki, dpp)
+    # TEMPORARILY DISABLED: Fuseki is offline
+    # background_tasks.add_task(sync_dpp_to_fuseki, dpp)
 
     return DPPStatus(
         dpp_uuid=dpp.dpp_uuid,
