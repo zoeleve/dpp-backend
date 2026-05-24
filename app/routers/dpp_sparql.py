@@ -5,13 +5,16 @@ from app.models.dpp import DPP
 from app.db.database_postgre import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.utils.sparql_client import execute_sparql_query, get_dpp_rdf_data, SPARQLException, RDF_BASE_URI
+from app.utils.sparql_client import execute_sparql_query, SPARQLException, RDF_BASE_URI
+from app.utils.rdf_converter import convert_dpp_to_rdf
 from app.schemas.dpp_sparql import SPARQLQueryRequest, SPARQLQueryResponse
 from app.configs.roles import Role
 from loguru import logger
 from rdflib import Graph
+import rdflib.term
 from app.configs.config import settings
 import re
+from urllib.parse import unquote
 
 router = APIRouter(prefix="/dpp/sparql", tags=["DPP SPARQL"])
 
@@ -26,7 +29,7 @@ async def sparql_query_execution(
     Executes a raw SPARQL SELECT query against the semantic store (Fuseki).
     Only SELECT queries are permitted.
     
-    SECURITY: 
+    SECURITY:
     - Admins can query everything.
     - Regular users can ONLY query graphs that are PUBLISHED.
     - Queries MUST specify target graphs explicitly (via URIs in the query).
@@ -44,9 +47,14 @@ async def sparql_query_execution(
 
     # 2. Access Control Logic
     if current_user.role != Role.ADMIN:
-        # Extract all URIs that look like DPP Graphs
+        # Strip comments and string literals before authorization check to prevent
+        # bypass via embedding a valid UUID inside a comment or string literal
+        clean_for_auth = re.sub(r'#[^\n]*', '', request.query)
+        clean_for_auth = re.sub(r'"[^"]*"', '""', clean_for_auth)
+        clean_for_auth = re.sub(r"'[^']*'", "''", clean_for_auth)
+
         base_uri_pattern = re.escape(RDF_BASE_URI + "/dpp/")
-        matches = re.findall(f"{base_uri_pattern}([^\\s>}}]+)", request.query)
+        matches = re.findall(f"{base_uri_pattern}([^\\s>}}]+)", clean_for_auth)
         
         if not matches:
             # Block queries that don't target specific graphs (to protect default graph)
@@ -129,15 +137,10 @@ async def get_dpp_graph_visualization(
         if not dpp.is_published and dpp.owner_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized to view this unpublished DPP")
 
-    # 2. Construct Graph URI using the stable Base URI
-    graph_uri = f"{RDF_BASE_URI}/dpp/{dpp.dpp_uuid}"
-
     try:
-        # 3. Fetch RDF data from Fuseki (Turtle format)
-        rdf_data = await get_dpp_rdf_data(graph_uri, "turtle")
-        
-        if not rdf_data:
-            return {"nodes": [], "edges": []}
+        # 3. Generate RDF on-the-fly from PostgreSQL data
+        # This ensures the graph is available immediately even if Fuseki sync is pending
+        rdf_data = convert_dpp_to_rdf(dpp)
 
         # 4. Parse RDF using rdflib
         g = Graph()
@@ -152,23 +155,25 @@ async def get_dpp_graph_visualization(
             # Add Subject Node
             s_str = str(s)
             if s_str not in added_nodes:
+                label = unquote(s_str.split("/")[-1])
                 nodes.append({
                     "id": s_str,
-                    "label": s_str.split("/")[-1], # Simple label from URI
+                    "label": label, # Simple label from URI (decoded)
                     "type": "Resource"
                 })
                 added_nodes.add(s_str)
 
             # Add Object Node (if it's a URI, not a Literal)
-            # If it's a Literal, we can treat it as a property of the subject, 
+            # If it's a Literal, we can treat it as a property of the subject,
             # or a separate node depending on visualization preference.
             # For graph viz, usually Literals are leaf nodes.
             o_str = str(o)
             if o_str not in added_nodes:
-                is_literal = not isinstance(o, (type(s))) # Check if it's not a URIRef/BNode
+                is_literal = isinstance(o, rdflib.term.Literal)
+                label = o_str if len(o_str) < 30 else o_str[:30] + "..."
                 nodes.append({
                     "id": o_str,
-                    "label": o_str if len(o_str) < 30 else o_str[:30] + "...", # Truncate long literals
+                    "label": unquote(label) if not is_literal else label, # Decode if URI
                     "type": "Literal" if is_literal else "Resource"
                 })
                 added_nodes.add(o_str)
