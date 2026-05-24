@@ -7,11 +7,17 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from app.db.database_postgre import get_db
 from app.models.dpp import DPP
+from app.models.user import User
+from app.utils.jwt_handler import get_current_active_user
 
 router = APIRouter(prefix="/dpp/export", tags=["DPP Export"])
 
 @router.get("/{dpp_id}")
-async def export_dpp(dpp_id: int, db: AsyncSession = Depends(get_db)):
+async def export_dpp(
+    dpp_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
     # 1. Search for the DPP in the database
     dpp_record = await db.get(DPP, dpp_id)
     
@@ -26,7 +32,11 @@ async def export_dpp(dpp_id: int, db: AsyncSession = Depends(get_db)):
     }
 
 @router.get("/{dpp_id}/pdf")
-async def export_dpp_pdf(dpp_id: int, db: AsyncSession = Depends(get_db)):
+async def export_dpp_pdf(
+    dpp_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
     # 1. Search for the DPP in the database
     dpp_record = await db.get(DPP, dpp_id)
 
